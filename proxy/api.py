@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 import time
 
@@ -13,11 +14,19 @@ from pathlib import Path
 
 import requests
 from flask import stream_with_context
+from dotenv import load_dotenv
 
 app = Flask(__name__)
 
-host = "api.openai.com"
-original_url_base = f"https://{host}/v1/"
+project_root = Path(__file__).parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
+
+host = os.environ.get("HOST_ORIGINAL", "api.openai.com")
+original_url_base = host if host.startswith("http") else f"https://{host}/"
+
+PORT = int(os.environ.get("PORT", "1785"))
+
 archive_path = Path(__file__).parent / "cache.zip"
 if not archive_path.exists():
     with zipfile.ZipFile(archive_path, "w") as zf:
@@ -41,8 +50,18 @@ def root():
     return """
         Proxy for llms
 
-        Go  <a href="/cache">here</a> for cache download. 
+        <ul>
+            <li> Go  <a href="/cache">here</a> for cache download.
+            <li> Go  <a href="/reload">here</a> for .env reload.
+        </ul>                         
     """
+
+
+@app.route("/reload", methods=["GET"])
+def reload():
+    load_dotenv(dotenv_path=env_path)
+    logger.info("Reloading cache")
+    return ".env reloaded"
 
 
 @app.route("/cache", methods=["GET"])
@@ -86,7 +105,7 @@ def _from_cache(file_name: str):
 
 
 def _response_batch(response: Response, file_name: str):
-    with zipfile.ZipFile(archive_path, "r") as zip_file, zip_file.open(
+    with zipfile.ZipFile(archive_path, "a") as zip_file, zip_file.open(
         file_name, "w"
     ) as file:
         content = response.json()
@@ -102,12 +121,13 @@ def _to_cache(content: dict | list, stream: bool) -> dict:
         "time_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())),
         "content": content,
     }
+    print(content)
     return data
 
 
 def _handle_request(request: Request):
     root_url = request.root_url
-    original_url = original_url_base + request.url[len(root_url) :]
+    original_url = original_url_base + request.url[len(root_url):]
     headers = dict(request.headers)
     headers["Host"] = host
     request_hash = calculate_hash(headers=headers, content=request.data)
@@ -122,7 +142,7 @@ def _handle_request(request: Request):
             namelist = archive.namelist()
 
     if file_name in namelist:
-        logger.info(f"Found in cache")
+        logger.info(f"Found in cache {file_name}")
         return _from_cache(file_name)
 
     else:
@@ -135,4 +155,4 @@ def _handle_request(request: Request):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=1785)
+    app.run(host="0.0.0.0", port=PORT)
