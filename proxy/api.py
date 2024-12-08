@@ -69,16 +69,17 @@ def cache():
     return send_file(archive_path)
 
 
+@app.route("/version", methods=["GET"])
+def version():
+    return "0.0.1"
+
+
 @app.route("/<path:path>", methods=["POST"])
 def proxy(path):
     if request.method == "GET":
-        pass
-        # resp = requests.get(f'{SITE_NAME}{path}')
-        # excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-        # headers = [(name, value) for (name, value) in resp.raw.headers.items() if name.lower() not in excluded_headers]
-        # response = Response(resp.content, resp.status_code, headers)
+        return _handle_request(request, method="get")
     elif request.method == "POST":
-        return _handle_request(request)
+        return _handle_request(request, method="post")
 
 
 def _stream_from_response(response: Response, file_name: str):
@@ -105,10 +106,11 @@ def _from_cache(file_name: str):
 
 
 def _response_batch(response: Response, file_name: str):
+    content = response.json()
+
     with zipfile.ZipFile(archive_path, "a") as zip_file, zip_file.open(
-        file_name, "w"
+            file_name, "w"
     ) as file:
-        content = response.json()
         data = _to_cache(content, stream=False)
         file.write(json.dumps(data, indent=4).encode())
     return jsonify(content)
@@ -125,12 +127,13 @@ def _to_cache(content: dict | list, stream: bool) -> dict:
     return data
 
 
-def _handle_request(request: Request):
+def _handle_request(request: Request, method: str):
     root_url = request.root_url
     original_url = original_url_base + request.url[len(root_url):]
     headers = dict(request.headers)
     headers["Host"] = host
-    request_hash = calculate_hash(headers=headers, content=request.data)
+    data = request.data if method == "POST" else request.path.encode("utf-8")
+    request_hash = calculate_hash(headers=headers, content=data)
     file_name = f"{request_hash}.json"
 
     if not archive_path.exists():
@@ -147,8 +150,11 @@ def _handle_request(request: Request):
 
     else:
         logger.info(f"Not found in cache")
-        response = requests.post(original_url, data=request.data, headers=headers)
-        if "text/event-stream" in response.headers["Content-Type"]:
+        if method == "post":
+            response = requests.post(original_url, data=request.data, headers=headers)
+        else:
+            response = requests.get(original_url, headers=headers)
+        if "text/event-stream" in response.headers.get("Content-Type", ""):
             return stream_with_context(_stream_from_response(response, file_name))
         else:
             return _response_batch(response, file_name)
